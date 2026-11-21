@@ -4,8 +4,9 @@
 > only analyses placements and *reports* what it would do, and the generated
 > plugin contains no records. With `DryRun` off, it writes minimal overrides
 > that disable the rejected placements. Apply mode has been tested in game with
-> Enemy Bats; other mods are validated record by record. Back up your saves and
-> start a new game when trying it.
+> Enemy Bats and Specters of Skyrim; other mods are validated record by record.
+> Generate the patch **before starting a new game**: an existing save keeps the
+> state of places it has already visited.
 
 Mod Actor Spawn Randomizer is a [Synthesis](https://github.com/Mutagen-Modding/Synthesis)
 patcher for Skyrim Special Edition. Its goal is to thin out the enemies that
@@ -99,9 +100,12 @@ was a **DRY RUN** or an **APPLY**. For every selected plugin it shows:
 
 ## Current limitations and safety restrictions
 
-- **In-game testing so far:** Enemy Bats (unscripted placements) confirmed in
-  game. Removing scripts from scripted placements (Specters) is verified record
-  by record; in-game confirmation is pending.
+- **In-game testing so far:** Enemy Bats (unscripted placements) and Specters
+  of Skyrim (placements with a night-time light-switch script, removed by the
+  patch) are confirmed in a new game. In an older save that had already visited
+  a rejected specter's location, the saved state won and the specter still
+  appeared. This is expected, and it is why the patch belongs at the start of a
+  playthrough.
 - **Generate before a playthrough.** References the game has already loaded
   in a save keep their saved state. If a removed script had already run in a
   save, the save keeps an orphaned copy of it. That is harmless; Papyrus only
