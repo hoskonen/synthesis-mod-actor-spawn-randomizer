@@ -8,9 +8,11 @@ namespace ModActorSpawnRandomizer;
 
 /// <summary>
 /// Turns the analysis into minimal ACHR overrides. It consumes the analysis as-is: only placements of
-/// units the selection REJECTED are touched, and each override is a copy of the winning record with
-/// <c>InitiallyDisabled</c> added. Everything is validated before anything is written, so a run either
-/// applies every planned unit completely or writes nothing.
+/// units the selection REJECTED are touched. Each override is a copy of the winning record with
+/// <c>InitiallyDisabled</c> added and, if the placement carries reference scripts, those scripts removed:
+/// a reference script keeps running on a disabled reference and may enable it again (Specters'
+/// AutomaticLightSwitchScript does exactly that every night). Everything is validated before anything is
+/// written, so a run either applies every planned unit completely or writes nothing.
 /// </summary>
 public static class ApplyPhase
 {
@@ -22,7 +24,8 @@ public static class ApplyPhase
         int PlannedUnits,
         int OverridesWritten,
         int SelectedUntouched,
-        int NotApplicableUntouched);
+        int NotApplicableUntouched,
+        int ScriptsRemoved);
 
     public sealed record Result(
         IReadOnlyList<PluginApplyResult> Plugins,
@@ -93,6 +96,9 @@ public static class ApplyPhase
             return $"base changed from {planned.Facts.BaseFormKey} to {record.Base.FormKey} (winning record from {context.ModKey})";
         if (record.EnableParent is not null && !record.EnableParent.Reference.IsNull)
             return $"winning record (from {context.ModKey}) has an enable parent; enable-parented placements are not applied";
+        var scripts = record.VirtualMachineAdapter?.Scripts.Select(s => s.Name).ToList() ?? [];
+        if (!scripts.SequenceEqual(planned.Facts.Scripts.Select(s => s.Name)))
+            return $"reference scripts changed since analysis (now: [{string.Join(", ", scripts)}])";
         if (context.ModKey != planned.Facts.WinningPlugin)
             return $"winning record now comes from {context.ModKey}, analysis used {planned.Facts.WinningPlugin}";
         if (FindCell(context) is null)
@@ -121,12 +127,16 @@ public static class ApplyPhase
         foreach (var planned in plan)
         {
             var context = linkCache.ResolveContext<IPlacedNpc, IPlacedNpcGetter>(planned.FormKey);
+            // Expected result, built independently of the override for the post-write check.
             var copy = context.Record.DeepCopy();
             copy.MajorFlags |= PlacedNpc.MajorFlag.InitiallyDisabled;
+            copy.VirtualMachineAdapter = null;
             expected[planned.FormKey] = copy;
 
             var overrideRecord = context.GetOrAddAsOverride(patch);
             overrideRecord.MajorFlags |= PlacedNpc.MajorFlag.InitiallyDisabled;
+            if (overrideRecord.VirtualMachineAdapter is not null)
+                overrideRecord.VirtualMachineAdapter = null;
         }
 
         errors.AddRange(VerifyPatch(patch, expected, preexisting));
@@ -142,7 +152,8 @@ public static class ApplyPhase
 
     /// <summary>
     /// Records this run added to the patch may only be the planned ACHR overrides (each equal to its winning
-    /// record plus InitiallyDisabled) and the cell/worldspace records Mutagen adds as their containers.
+    /// record plus InitiallyDisabled, minus reference scripts) and the cell/worldspace records Mutagen adds
+    /// as their containers.
     /// Records that were already in the patch before the run (earlier patchers in the group) are ignored.
     /// </summary>
     public static IReadOnlyList<string> VerifyPatch(
@@ -160,7 +171,7 @@ public static class ApplyPhase
             if (!expected.TryGetValue(record.FormKey, out var want))
                 errors.Add($"{record.FormKey}: unplanned ACHR override in the patch");
             else if (!want.Equals(record))
-                errors.Add($"{record.FormKey}: override differs from the winning record by more than InitiallyDisabled");
+                errors.Add($"{record.FormKey}: override differs from the winning record by more than InitiallyDisabled and script removal");
         }
 
         foreach (var missing in expected.Keys.Except(placed.Select(r => r.FormKey)))
@@ -189,7 +200,8 @@ public static class ApplyPhase
                 planned.Select(p => p.UnitIndex).Distinct().Count(),
                 planned.Count(p => written.Contains(p.FormKey)),
                 a.Units.Where(u => u.Decision == SelectionDecision.Selected).Sum(u => u.Members.Count),
-                a.Units.Where(u => u.Decision == SelectionDecision.NotApplicable).Sum(u => u.Members.Count));
+                a.Units.Where(u => u.Decision == SelectionDecision.NotApplicable).Sum(u => u.Members.Count),
+                planned.Count(p => written.Contains(p.FormKey) && p.Facts.Scripts.Count > 0));
         }).ToList();
     }
 

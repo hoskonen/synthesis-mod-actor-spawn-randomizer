@@ -111,6 +111,10 @@ public sealed class RealPluginTests
         Assert.AreEqual(88, perPlugin[Specters].OverridesWritten);
         Assert.AreEqual(11, perPlugin[Mourning].OverridesWritten);
         Assert.AreEqual(150, outcome.Apply.TotalWritten);
+        // Every rejected specter carries AutomaticLightSwitchScript, which would enable it again at night.
+        Assert.AreEqual(44, perPlugin[Specters].ScriptsRemoved);
+        Assert.AreEqual(0, perPlugin[Bats].ScriptsRemoved);
+        Assert.AreEqual(0, perPlugin[Mourning].ScriptsRemoved);
 
         var path = Path.Combine(Path.GetTempPath(), $"masr-{Guid.NewGuid():N}", patchKey.FileName);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -122,6 +126,7 @@ public sealed class RealPluginTests
             var achrs = written.EnumerateMajorRecords<IPlacedNpcGetter>().ToList();
             Assert.AreEqual(150, achrs.Count);
             Assert.IsTrue(achrs.All(r => r.MajorFlags.HasFlag(PlacedNpc.MajorFlag.InitiallyDisabled)));
+            Assert.IsTrue(achrs.All(r => r.VirtualMachineAdapter is null), "no disabled placement may keep a reference script");
             var rejected = outcome.Analyses.SelectMany(a => a.Units)
                 .Where(u => u.Decision == SelectionDecision.Rejected)
                 .SelectMany(u => u.Members)
@@ -142,6 +147,7 @@ public sealed class RealPluginTests
             {
                 var expected = cache.Resolve<IPlacedNpcGetter>(achr.FormKey).DeepCopy();
                 expected.MajorFlags |= PlacedNpc.MajorFlag.InitiallyDisabled;
+                expected.VirtualMachineAdapter = null;
                 Assert.IsTrue(expected.Equals(achr), $"{achr.FormKey} differs from its winning record");
             }
 

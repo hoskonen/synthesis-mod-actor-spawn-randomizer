@@ -18,7 +18,7 @@ public static class DryRunReport
         sb.AppendLine(rule);
         sb.AppendLine(apply is null
             ? "Mod Actor Spawn Randomizer - DRY RUN (read-only: no records are written)"
-            : "Mod Actor Spawn Randomizer - APPLY (writes InitiallyDisabled overrides for REJECTED units)");
+            : "Mod Actor Spawn Randomizer - APPLY (disables REJECTED units: InitiallyDisabled, reference scripts removed)");
         sb.AppendLine($"Algorithm {DeterministicSelector.Domain} | Seed {seed} | {analyses.Count} plugin(s) | detailed report: {(detailed ? "on" : "off")}");
         sb.AppendLine("Eligibility comes from the safety rules and never depends on the seed.");
         sb.AppendLine(apply is null
@@ -56,7 +56,7 @@ public static class DryRunReport
         var reconciled = apply.TotalWritten == apply.TotalPlanned ? "reconciled" : "MISMATCH";
         sb.AppendLine($"APPLY COMPLETE - {apply.TotalWritten} overrides written for {apply.TotalPlanned} planned disables ({reconciled})");
         foreach (var p in apply.Plugins)
-            sb.AppendLine($"  {p.Plugin,-40} disabled {p.OverridesWritten,5} / planned {p.PlannedPlacements,5}   untouched: selected {p.SelectedUntouched}, not applicable {p.NotApplicableUntouched}");
+            sb.AppendLine($"  {p.Plugin,-40} disabled {p.OverridesWritten,5} / planned {p.PlannedPlacements,5}   scripts removed {p.ScriptsRemoved}   untouched: selected {p.SelectedUntouched}, not applicable {p.NotApplicableUntouched}");
     }
 
     private static void RenderPlugin(StringBuilder sb, PluginAnalysis a, LoadOrderLayout layout, bool detailed, ApplyPhase.Result? apply)
@@ -94,12 +94,27 @@ public static class DryRunReport
         }
         sb.AppendLine($"  Not applicable (unchanged) .............. {a.Units.Where(u => u.Decision == SelectionDecision.NotApplicable).Sum(u => u.Members.Count),5}");
 
+        // Reference scripts keep running on a disabled reference and may enable it again,
+        // so a rejected placement's scripts are removed together with setting InitiallyDisabled.
+        var rejectedKeys = a.Units.Where(u => u.Decision == SelectionDecision.Rejected).SelectMany(u => u.Members).ToHashSet();
+        var scripted = p.Where(x => rejectedKeys.Contains(x.Facts.FormKey) && x.Facts.Scripts.Count > 0).ToList();
+        if (scripted.Count > 0)
+        {
+            var names = scripted.SelectMany(x => x.Facts.Scripts.Select(s => s.Name))
+                .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(g => g.Count())
+                .Select(g => $"{g.Key} {g.Count()}");
+            sb.AppendLine($"  REJECTED with reference scripts ......... {scripted.Count,5}   ({string.Join(", ", names)})");
+            sb.AppendLine($"    -> their scripts {(apply is null ? "would be" : "are")} removed with the disable, so a script cannot enable them again");
+        }
+
         if (apply?.Plugins.FirstOrDefault(r => r.Plugin == a.Plugin) is { } applied)
         {
             sb.AppendLine();
             sb.AppendLine(apply.Succeeded ? "Apply result" : "Apply result (STOPPED - nothing written)");
             sb.AppendLine($"  Planned disables (rejected placements) .. {applied.PlannedPlacements,5}   in {applied.PlannedUnits} units");
             sb.AppendLine($"  Overrides written (InitiallyDisabled) ... {applied.OverridesWritten,5}");
+            sb.AppendLine($"  of which reference scripts removed ...... {applied.ScriptsRemoved,5}");
             sb.AppendLine($"  Untouched: selected {applied.SelectedUntouched}, excluded / needs investigation {applied.NotApplicableUntouched}");
         }
 

@@ -3,8 +3,8 @@
 > **Early development version.** `DryRun` is **on by default**: the patcher
 > only analyses placements and *reports* what it would do, and the generated
 > plugin contains no records. With `DryRun` off, it writes minimal overrides
-> that disable the rejected placements. The apply mode has been validated
-> against real plugins but **not yet tested in game**. Back up your saves and
+> that disable the rejected placements. Apply mode has been tested in game with
+> Enemy Bats; other mods are validated record by record. Back up your saves and
 > start a new game when trying it.
 
 Mod Actor Spawn Randomizer is a [Synthesis](https://github.com/Mutagen-Modding/Synthesis)
@@ -42,10 +42,16 @@ another's.
      Small plugins vary more between seeds.
 5. **Apply** (only when `DryRun` is off). Every placement of a *rejected*
    unit gets an override in the Synthesis patch. The override is a copy of the
-   winning record with only the `InitiallyDisabled` flag added:
+   winning record with the `InitiallyDisabled` flag added and, if the placement
+   carries **reference scripts, those scripts removed**:
    - Nothing is deleted.
-   - NPC bases, scripts, positions, links and enable parents are left as they
-     are.
+   - Scripts are removed because a reference script keeps running on a
+     disabled reference and can enable it again. Specters of Skyrim's
+     `AutomaticLightSwitchScript`, for example, switches its specter back on
+     every night. The report lists every rejected placement whose scripts are
+     removed, already in a dry run.
+   - NPC bases, positions, links, enable parents and everything else are left
+     as they are.
    - Selected, excluded and needs-investigation placements get no override.
    - A rejected group is always disabled as a whole.
 
@@ -79,8 +85,10 @@ was a **DRY RUN** or an **APPLY**. For every selected plugin it shows:
 - **Eligibility counts** (from the safety rules, independent of the seed) and
   **selection counts.** *REJECTED* placements are disabled in apply mode, and
   would be disabled in a dry run.
-- **In apply mode:** the planned disables, the overrides actually written, and
-  the untouched placements, followed by a final `APPLY COMPLETE … (reconciled)`
+- **Rejected placements with reference scripts,** listed by script name. Their
+  scripts are removed together with the disable.
+- **In apply mode:** the planned disables, the overrides actually written (and
+  how many had scripts removed), and the untouched placements, followed by a final `APPLY COMPLETE … (reconciled)`
   line, or `APPLY STOPPED` with the reasons.
 - **Reasons** for every placement that is excluded or needs investigation.
 - **Encounter groups**, with their enable parent and shared link targets.
@@ -91,10 +99,13 @@ was a **DRY RUN** or an **APPLY**. For every selected plugin it shows:
 
 ## Current limitations and safety restrictions
 
-- **Not yet tested in game.** The overrides have been verified record by
-  record, but not yet in a running game.
+- **In-game testing so far:** Enemy Bats (unscripted placements) confirmed in
+  game. Removing scripts from scripted placements (Specters) is verified record
+  by record; in-game confirmation is pending.
 - **Generate before a playthrough.** References the game has already loaded
-  in a save keep their saved state. The patch also contains copies of the
+  in a save keep their saved state. If a removed script had already run in a
+  save, the save keeps an orphaned copy of it. That is harmless; Papyrus only
+  logs a warning. The patch also contains copies of the
   cells and worldspaces that hold the disabled placements, as every
   reference-override patch does. Regenerate the patch whenever your load
   order or settings change.

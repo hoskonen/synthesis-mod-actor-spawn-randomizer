@@ -144,7 +144,7 @@ public sealed class ApplyPhaseTests
     }
 
     [TestMethod]
-    public void OverrideIsWinningRecordPlusInitiallyDisabledOnly()
+    public void UnscriptedOverrideIsWinningRecordPlusInitiallyDisabledOnly()
     {
         var world = new World();
         var keyword = new Keyword(world.Master) { EditorID = "LinkKw" };
@@ -156,7 +156,6 @@ public sealed class ApplyPhaseTests
             p.LevelModifier = Level.Hard;
             p.Scale = 1.5f;
             p.LinkedReferences.Add(new LinkedReferences { Reference = idle.ToLink<IPlacedGetter>(), KeywordOrReference = keyword.ToLink<IKeywordLinkedReferenceGetter>() });
-            p.VirtualMachineAdapter = new VirtualMachineAdapter { Scripts = { new ScriptEntry { Name = "masterambushscript" } } };
         });
         // The winning record comes from a later plugin that moved the placement.
         var winning = world.OverrideInLater(original, p => p.Placement = new Placement { Position = new P3Float(1, 2, 3), Rotation = new P3Float(0, 0, 1) });
@@ -170,9 +169,61 @@ public sealed class ApplyPhaseTests
         Assert.IsTrue(expected.Equals(written), "override must equal the winning record plus InitiallyDisabled");
         Assert.AreEqual(new P3Float(1, 2, 3), written.Placement!.Position, "winning (later plugin) data is preserved");
         Assert.AreEqual(1, written.LinkedReferences.Count);
-        Assert.AreEqual("masterambushscript", written.VirtualMachineAdapter!.Scripts.Single().Name);
         Assert.IsFalse(patch.Npcs.Any(), "NPC bases are never modified");
         Assert.IsTrue(patch.EnumerateMajorRecords().All(r => r is IPlacedNpcGetter or ICellGetter or IWorldspaceGetter));
+    }
+
+    [TestMethod]
+    public void ScriptedOverrideAlsoLosesItsReferenceScriptsAndNothingElse()
+    {
+        // Specters pattern: a script on the reference would enable it again at night.
+        var world = new World();
+        var scripted = world.Place(1, p =>
+        {
+            p.LevelModifier = Level.Hard;
+            p.VirtualMachineAdapter = new VirtualMachineAdapter
+            {
+                Scripts = { new ScriptEntry { Name = "AutomaticLightSwitchScript", Properties = { new ScriptFloatProperty { Name = "LightsOnTime", Data = 22f } } } },
+            };
+        });
+
+        var (outcome, patch) = Run(world, Settings(0));
+
+        var written = patch.EnumerateMajorRecords<IPlacedNpcGetter>().Single();
+        Assert.IsTrue(written.MajorFlags.HasFlag(PlacedNpc.MajorFlag.InitiallyDisabled));
+        Assert.IsNull(written.VirtualMachineAdapter, "reference scripts must be removed from a disabled placement");
+        var expected = scripted.DeepCopy();
+        expected.MajorFlags |= PlacedNpc.MajorFlag.InitiallyDisabled;
+        expected.VirtualMachineAdapter = null;
+        Assert.IsTrue(expected.Equals(written), "only InitiallyDisabled and the script removal may differ");
+        Assert.AreEqual(Level.Hard, written.LevelModifier);
+        Assert.AreEqual(1, outcome.Apply!.Plugins.Single().ScriptsRemoved);
+        StringAssert.Contains(outcome.Report, "REJECTED with reference scripts .........     1   (AutomaticLightSwitchScript 1)");
+        StringAssert.Contains(outcome.Report, "of which reference scripts removed ......     1");
+    }
+
+    [TestMethod]
+    public void DryRunReportFlagsRejectedScriptedPlacements()
+    {
+        var world = new World();
+        world.PlacePlain(3);
+        world.Place(9000, p => p.VirtualMachineAdapter = new VirtualMachineAdapter { Scripts = { new ScriptEntry { Name = "masterambushscript" } } });
+
+        var (outcome, patch) = Run(world, Settings(0, dryRun: true));
+
+        Assert.AreEqual(0, patch.EnumerateMajorRecords().Count());
+        StringAssert.Contains(outcome.Report, "REJECTED with reference scripts .........     1   (masterambushscript 1)");
+        StringAssert.Contains(outcome.Report, "their scripts would be removed with the disable");
+    }
+
+    [TestMethod]
+    public void SelectedScriptedPlacementKeepsItsScripts()
+    {
+        var world = new World();
+        world.Place(1, p => p.VirtualMachineAdapter = new VirtualMachineAdapter { Scripts = { new ScriptEntry { Name = "masterambushscript" } } });
+        var (outcome, patch) = Run(world, Settings(100));
+        Assert.AreEqual(0, patch.EnumerateMajorRecords().Count(), "selected placements get no override at all");
+        Assert.IsFalse(outcome.Report.Contains("REJECTED with reference scripts"));
     }
 
     [TestMethod]
@@ -284,6 +335,20 @@ public sealed class ApplyPhaseTests
         Assert.IsTrue(errors.Any(e => e.Contains("already initially disabled")));
         Assert.IsTrue(errors.Any(e => e.Contains("base changed")));
         Assert.IsTrue(errors.Any(e => e.Contains("not found")));
+    }
+
+    [TestMethod]
+    public void ValidationRejectsScriptsChangedAfterAnalysis()
+    {
+        var world = new World();
+        var placed = world.PlacePlain(1)[0];
+        var before = world.LoadOrder();
+        var plan = ApplyPhase.Plan(DryRun.Analyze(Settings(0), before, before.ToImmutableLinkCache()));
+
+        world.OverrideInLater(placed, p => p.VirtualMachineAdapter = new VirtualMachineAdapter { Scripts = { new ScriptEntry { Name = "SomeQuestScript" } } });
+        var errors = ApplyPhase.Validate(plan, world.LoadOrder(withLater: true).ToImmutableLinkCache());
+
+        StringAssert.Contains(errors.Single(), "reference scripts changed since analysis");
     }
 
     [TestMethod]
