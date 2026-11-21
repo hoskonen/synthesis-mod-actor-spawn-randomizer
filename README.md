@@ -1,8 +1,11 @@
 # Mod Actor Spawn Randomizer
 
-> **Early development version: read-only.** The patcher currently analyses
-> placements and *reports* what it would do. It does **not** disable anything
-> yet, and the generated plugin contains no records.
+> **Early development version.** `DryRun` is **on by default**: the patcher
+> only analyses placements and *reports* what it would do, and the generated
+> plugin contains no records. With `DryRun` off, it writes minimal overrides
+> that disable the rejected placements. The apply mode has been validated
+> against real plugins but **not yet tested in game**. Back up your saves and
+> start a new game when trying it.
 
 Mod Actor Spawn Randomizer is a [Synthesis](https://github.com/Mutagen-Modding/Synthesis)
 patcher for Skyrim Special Edition. Its goal is to thin out the enemies that
@@ -37,30 +40,48 @@ another's.
      placements are eligible.
    - The probability is an independent chance per unit, not an exact count.
      Small plugins vary more between seeds.
+5. **Apply** (only when `DryRun` is off). Every placement of a *rejected*
+   unit gets an override in the Synthesis patch. The override is a copy of the
+   winning record with only the `InitiallyDisabled` flag added:
+   - Nothing is deleted.
+   - NPC bases, scripts, positions, links and enable parents are left as they
+     are.
+   - Selected, excluded and needs-investigation placements get no override.
+   - A rejected group is always disabled as a whole.
+
+   Before anything is written, every planned record is checked again against
+   your load order. If any check fails (for example, a record is missing,
+   deleted, already disabled or changed), the run stops **without writing
+   anything** and names the affected records. Afterwards, the number of
+   overrides written is checked against the planned number.
 
 ## Settings
 
 | Setting | Meaning |
 |---|---|
 | `Seed` | Global seed (any 32-bit integer). Default `38174`. |
+| `DryRun` | On (default): analyse and report only. Off: write the overrides that disable rejected placements. |
 | `DetailedReport` | Also list every analysed placement with its status, decision and hash score. |
 | `Plugins` | One entry per plugin: `Plugin` (picked from your load order) and `Probability` (0–100, the percentage of eligible units to keep). |
 
 Each plugin's probability is applied independently. The same local FormID in
 two different plugins produces independent decisions.
 
-## The dry-run report
+## The report
 
-Each run prints a report to the Synthesis log. For every selected plugin it
-shows:
+Each run prints a report to the Synthesis log. Its header shows whether the run
+was a **DRY RUN** or an **APPLY**. For every selected plugin it shows:
 
 - **Layout:** `Simple`, `Simple + links`, `Grouped` or
   `Probably not a creature mod`, plus any **warnings** that need manual review.
   The layout is a diagnostic only. A plugin with warnings can still have many
   eligible placements.
 - **Eligibility counts** (from the safety rules, independent of the seed) and
-  **simulated selection counts.** *REJECTED* means "would be disabled once the
-  apply phase exists".
+  **selection counts.** *REJECTED* placements are disabled in apply mode, and
+  would be disabled in a dry run.
+- **In apply mode:** the planned disables, the overrides actually written, and
+  the untouched placements, followed by a final `APPLY COMPLETE … (reconciled)`
+  line, or `APPLY STOPPED` with the reasons.
 - **Reasons** for every placement that is excluded or needs investigation.
 - **Encounter groups**, with their enable parent and shared link targets.
   Groups that span several cells are marked as location switches.
@@ -70,7 +91,13 @@ shows:
 
 ## Current limitations and safety restrictions
 
-- **No apply phase.** Nothing is disabled yet.
+- **Not yet tested in game.** The overrides have been verified record by
+  record, but not yet in a running game.
+- **Generate before a playthrough.** References the game has already loaded
+  in a save keep their saved state. The patch also contains copies of the
+  cells and worldspaces that hold the disabled placements, as every
+  reference-override patch does. Regenerate the patch whenever your load
+  order or settings change.
 - **Placements with an enable parent are not touched.** It has not been
   verified in game whether disabling such a placement works reliably. These
   are typically trigger-spawned ambushes and location-controlled groups such as

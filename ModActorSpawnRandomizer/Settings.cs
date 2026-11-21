@@ -10,6 +10,10 @@ public sealed class Settings
     public int Seed = 38174;
 
     [SynthesisOrder]
+    [SynthesisTooltip("On: analyse and report only; the patch contains no records. Off: disable (InitiallyDisabled) every placement of a REJECTED unit.")]
+    public bool DryRun = true;
+
+    [SynthesisOrder]
     [SynthesisTooltip("List every analysed placement in the report, not only summaries and non-eligible placements.")]
     public bool DetailedReport = false;
 

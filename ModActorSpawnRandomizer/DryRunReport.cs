@@ -3,31 +3,63 @@ using System.Text;
 
 namespace ModActorSpawnRandomizer;
 
-/// <summary>Human-readable dry-run report. Pure formatting; no analysis happens here.</summary>
+/// <summary>Human-readable run report (dry run or apply). Pure formatting; no analysis happens here.</summary>
 public static class DryRunReport
 {
-    public static string Render(IReadOnlyList<PluginAnalysis> analyses, LoadOrderLayout layout, int seed, bool detailed)
+    public static string Render(
+        IReadOnlyList<PluginAnalysis> analyses,
+        LoadOrderLayout layout,
+        int seed,
+        bool detailed,
+        ApplyPhase.Result? apply = null)
     {
         var sb = new StringBuilder();
         var rule = new string('=', 100);
         sb.AppendLine(rule);
-        sb.AppendLine("Mod Actor Spawn Randomizer - DRY RUN (read-only: no records are written)");
+        sb.AppendLine(apply is null
+            ? "Mod Actor Spawn Randomizer - DRY RUN (read-only: no records are written)"
+            : "Mod Actor Spawn Randomizer - APPLY (writes InitiallyDisabled overrides for REJECTED units)");
         sb.AppendLine($"Algorithm {DeterministicSelector.Domain} | Seed {seed} | {analyses.Count} plugin(s) | detailed report: {(detailed ? "on" : "off")}");
         sb.AppendLine("Eligibility comes from the safety rules and never depends on the seed.");
-        sb.AppendLine("Selection is simulated over eligible units only: REJECTED = would be disabled by the future apply phase.");
+        sb.AppendLine(apply is null
+            ? "Selection is simulated over eligible units only: REJECTED = would be disabled when DryRun is off."
+            : "Selection covers eligible units only: REJECTED = disabled by this patch; everything else is untouched.");
         sb.AppendLine("IDs: in-game FormID (xEdit / console) followed by the load-order independent FormKey.");
         sb.AppendLine(rule);
 
         foreach (var analysis in analyses)
         {
             sb.AppendLine();
-            RenderPlugin(sb, analysis, layout, detailed);
+            RenderPlugin(sb, analysis, layout, detailed, apply);
+        }
+
+        if (apply is not null)
+        {
+            sb.AppendLine();
+            sb.AppendLine(rule);
+            RenderApplySummary(sb, apply);
+            sb.AppendLine(rule);
         }
 
         return sb.ToString();
     }
 
-    private static void RenderPlugin(StringBuilder sb, PluginAnalysis a, LoadOrderLayout layout, bool detailed)
+    private static void RenderApplySummary(StringBuilder sb, ApplyPhase.Result apply)
+    {
+        if (!apply.Succeeded)
+        {
+            sb.AppendLine($"APPLY STOPPED - nothing was written. {apply.Errors.Count} problem(s):");
+            foreach (var error in apply.Errors) sb.AppendLine($"  ! {error}");
+            return;
+        }
+
+        var reconciled = apply.TotalWritten == apply.TotalPlanned ? "reconciled" : "MISMATCH";
+        sb.AppendLine($"APPLY COMPLETE - {apply.TotalWritten} overrides written for {apply.TotalPlanned} planned disables ({reconciled})");
+        foreach (var p in apply.Plugins)
+            sb.AppendLine($"  {p.Plugin,-40} disabled {p.OverridesWritten,5} / planned {p.PlannedPlacements,5}   untouched: selected {p.SelectedUntouched}, not applicable {p.NotApplicableUntouched}");
+    }
+
+    private static void RenderPlugin(StringBuilder sb, PluginAnalysis a, LoadOrderLayout layout, bool detailed, ApplyPhase.Result? apply)
     {
         sb.AppendLine($"== {a.Plugin}  [{layout.Slot(a.Plugin)}]  probability {Pct(a.Probability)}");
         if (!a.Found)
@@ -51,14 +83,25 @@ public static class DryRunReport
         sb.AppendLine($"  Excluded (untouched) .................... {Count(p, PlacementStatus.Excluded),5}");
 
         sb.AppendLine();
-        sb.AppendLine($"Selection (simulated; seed {a.Seed}, keep {Pct(a.Probability)} of eligible units)");
+        sb.AppendLine($"Selection ({(apply is null ? "simulated; " : "")}seed {a.Seed}, keep {Pct(a.Probability)} of eligible units)");
         foreach (var decision in new[] { SelectionDecision.Selected, SelectionDecision.Rejected })
         {
             var units = a.Units.Where(u => u.Decision == decision).ToList();
-            var label = decision == SelectionDecision.Selected ? "SELECTED (kept active) ..................." : "REJECTED (would be disabled) .............";
+            var label = decision == SelectionDecision.Selected
+                ? "SELECTED (kept active) ..................."
+                : apply is null ? "REJECTED (would be disabled) ............." : "REJECTED (disabled) ......................";
             sb.AppendLine($"  {label} {units.Sum(u => u.Members.Count),5}   placements in {units.Count} units");
         }
         sb.AppendLine($"  Not applicable (unchanged) .............. {a.Units.Where(u => u.Decision == SelectionDecision.NotApplicable).Sum(u => u.Members.Count),5}");
+
+        if (apply?.Plugins.FirstOrDefault(r => r.Plugin == a.Plugin) is { } applied)
+        {
+            sb.AppendLine();
+            sb.AppendLine(apply.Succeeded ? "Apply result" : "Apply result (STOPPED - nothing written)");
+            sb.AppendLine($"  Planned disables (rejected placements) .. {applied.PlannedPlacements,5}   in {applied.PlannedUnits} units");
+            sb.AppendLine($"  Overrides written (InitiallyDisabled) ... {applied.OverridesWritten,5}");
+            sb.AppendLine($"  Untouched: selected {applied.SelectedUntouched}, excluded / needs investigation {applied.NotApplicableUntouched}");
+        }
 
         var reasons = p.SelectMany(x => x.Reasons).GroupBy(r => r).OrderBy(g => PlacementRules.SeverityOf(g.Key)).ThenByDescending(g => g.Count()).ToList();
         if (reasons.Count > 0)

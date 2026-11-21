@@ -67,6 +67,7 @@ public sealed class RealPluginTests
             ],
         };
 
+        _loadOrder = loadOrder;
         var analyses = DryRun.Analyze(settings, loadOrder, loadOrder.ToImmutableLinkCache());
         _results = analyses.ToDictionary(a => a.Plugin.FileName.String);
 
@@ -78,6 +79,108 @@ public sealed class RealPluginTests
     }
 
     private static LoadOrderLayout? _layout;
+    private static IReadOnlyList<ISkyrimModGetter>? _loadOrder;
+
+    /// <summary>
+    /// The configuration of the first GUI dry run (Bats, Specters, Mourning Souls at 50%, seed 38174):
+    /// apply it, write the ESP to disk, read it back and check every record.
+    /// </summary>
+    [TestMethod]
+    public void ApplyReproducesFirstGuiRunAndWritesOnlyExpectedRecords()
+    {
+        _ = Get(Bats);
+        var settings = new Settings
+        {
+            Seed = 38174,
+            DryRun = false,
+            Plugins =
+            [
+                new PluginSelection { Plugin = ModKey.FromFileName(Bats), Probability = 50 },
+                new PluginSelection { Plugin = ModKey.FromFileName(Specters), Probability = 50 },
+                new PluginSelection { Plugin = ModKey.FromFileName(Mourning), Probability = 50 },
+            ],
+        };
+        var patchKey = ModKey.FromFileName("ModActorSpawnRandomizer.esp");
+        var patch = new SkyrimMod(patchKey, SkyrimRelease.SkyrimSE);
+        var cache = _loadOrder!.ToImmutableLinkCache();
+
+        var outcome = PatcherRun.Execute(settings, _loadOrder!, cache, patch);
+
+        var perPlugin = outcome.Apply!.Plugins.ToDictionary(p => p.Plugin.FileName.String);
+        Assert.AreEqual(51, perPlugin[Bats].OverridesWritten);
+        Assert.AreEqual(88, perPlugin[Specters].OverridesWritten);
+        Assert.AreEqual(11, perPlugin[Mourning].OverridesWritten);
+        Assert.AreEqual(150, outcome.Apply.TotalWritten);
+
+        var path = Path.Combine(Path.GetTempPath(), $"masr-{Guid.NewGuid():N}", patchKey.FileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        try
+        {
+            patch.WriteToBinary(path);
+            using var written = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
+
+            var achrs = written.EnumerateMajorRecords<IPlacedNpcGetter>().ToList();
+            Assert.AreEqual(150, achrs.Count);
+            Assert.IsTrue(achrs.All(r => r.MajorFlags.HasFlag(PlacedNpc.MajorFlag.InitiallyDisabled)));
+            var rejected = outcome.Analyses.SelectMany(a => a.Units)
+                .Where(u => u.Decision == SelectionDecision.Rejected)
+                .SelectMany(u => u.Members)
+                .ToHashSet();
+            Assert.IsTrue(rejected.SetEquals(achrs.Select(r => r.FormKey)));
+
+            var types = written.EnumerateMajorRecords().GroupBy(r => r switch
+            {
+                IPlacedNpcGetter => "ACHR",
+                ICellGetter => "CELL",
+                IWorldspaceGetter => "WRLD",
+                _ => r.GetType().Name,
+            }).ToDictionary(g => g.Key, g => g.Count());
+            CollectionAssert.AreEquivalent(new[] { "ACHR", "CELL", "WRLD" }, types.Keys.ToArray(), string.Join(", ", types));
+
+            // Every written ACHR equals its winning record except for the InitiallyDisabled flag.
+            foreach (var achr in achrs)
+            {
+                var expected = cache.Resolve<IPlacedNpcGetter>(achr.FormKey).DeepCopy();
+                expected.MajorFlags |= PlacedNpc.MajorFlag.InitiallyDisabled;
+                Assert.IsTrue(expected.Equals(achr), $"{achr.FormKey} differs from its winning record");
+            }
+
+            // Specters pairs stay atomic: both or neither member of every pair is disabled.
+            var specterUnits = outcome.Analyses.Single(a => a.Plugin.FileName == Specters).Units;
+            var disabled = achrs.Select(r => r.FormKey).ToHashSet();
+            Assert.IsTrue(specterUnits.All(u => u.Members.Count(disabled.Contains) is 0 or 2));
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(path)!, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void ApplyNeverTouchesHpeGroupsNeedingInvestigation()
+    {
+        _ = Get(Hpe);
+        var settings = new Settings
+        {
+            Seed = 38174,
+            DryRun = false,
+            Plugins = [new PluginSelection { Plugin = ModKey.FromFileName(Hpe), Probability = 0 }],
+        };
+        var patch = new SkyrimMod(ModKey.FromFileName("ModActorSpawnRandomizer.esp"), SkyrimRelease.SkyrimSE);
+
+        var outcome = PatcherRun.Execute(settings, _loadOrder!, _loadOrder!.ToImmutableLinkCache(), patch);
+
+        var disabled = patch.EnumerateMajorRecords<IPlacedNpcGetter>().Select(r => r.FormKey).ToHashSet();
+        var analysis = outcome.Analyses.Single();
+        var selectable = analysis.Placements.Where(p => p.Status is PlacementStatus.Eligible or PlacementStatus.Grouped).ToList();
+        Assert.AreEqual(selectable.Count, disabled.Count, "0% disables every selectable placement");
+        Assert.IsTrue(analysis.Placements
+            .Where(p => p.Status is PlacementStatus.Excluded or PlacementStatus.NeedsInvestigation)
+            .All(p => !disabled.Contains(p.Facts.FormKey)));
+        foreach (var id in new uint[] { 0xAFB, 0xAFC, 0xAFD, 0xAFE, 0xAFF })
+            Assert.IsFalse(disabled.Contains(new FormKey(ModKey.FromFileName(Hpe), id)), "Bleak Falls ambush must stay untouched");
+        Assert.IsFalse(analysis.Placements.Any(p => p.Facts.EnableParent is not null && disabled.Contains(p.Facts.FormKey)));
+    }
 
     private static PluginAnalysis Get(string plugin)
     {

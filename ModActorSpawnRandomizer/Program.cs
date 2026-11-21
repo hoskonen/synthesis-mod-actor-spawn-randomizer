@@ -22,22 +22,20 @@ public static class Program
 
     public static void RunPatch(IPatcherState<ISkyrimMod, ISkyrimModGetter> state)
     {
-        var settings = _settings.Value;
-
-        // Milestone 1 is read-only: analyse and report, never write records.
         var activeLoadOrder = state.LoadOrder.ListedOrder
             .Where(listing => listing.Enabled && listing.ModKey != state.PatchMod.ModKey)
             .Select(listing => listing.Mod)
             .OfType<ISkyrimModGetter>()
             .ToList();
 
-        var analyses = DryRun.Analyze(settings, activeLoadOrder, state.LinkCache);
-        var report = DryRunReport.Render(analyses, LoadOrderLayout.FromMods(activeLoadOrder), settings.Seed, settings.DetailedReport);
+        var outcome = PatcherRun.Execute(_settings.Value, activeLoadOrder, state.LinkCache, state.PatchMod);
 
-        Console.Out.Write(report);
+        // Resolve Console.Out only now: the Synthesis host replaces the console writer during the run,
+        // so a writer captured earlier no longer reaches the Synthesis log.
+        Console.Out.Write(outcome.Report);
         Console.Out.Flush();
 
-        if (state.PatchMod.EnumerateMajorRecords().Any())
-            throw new InvalidOperationException("Read-only invariant violated: the dry run produced records in the output patch.");
+        if (outcome.Failure is not null)
+            throw new InvalidOperationException(outcome.Failure);
     }
 }
